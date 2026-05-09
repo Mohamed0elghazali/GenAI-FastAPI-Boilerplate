@@ -1,25 +1,28 @@
+"""
+agents.rag.agent.py
+------------------------
+"""
+
 import re
 import logging
 
 from datetime import datetime
-from time import perf_counter
+from typing import Literal
+from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
-from typing import Literal, Dict
-from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.memory import InMemorySaver  
+from langgraph.checkpoint.memory import InMemorySaver
 
 from core.clients import ClientFactory
-from agents.callbacks.handler import callback_handler
 from agents.rag.prompts.system_prompt import SYSTEM_PROMPT
 from agents.rag.tools.tools_limits import TOOL_CALL_LIMITS
-from agents.rag.tools.file_system_tools import write_file_tool
+from agents.rag.tools.file_system_tools import write_file_tool, ls_dir_tool
 from agents.rag.models import AgentState
 
 logger = logging.getLogger(__name__)
 
 LLM = ClientFactory.get_llm()
 
-tools = [write_file_tool]
+tools = [write_file_tool, ls_dir_tool]
 tools_by_name = {tool.name: tool for tool in tools}
 llm_with_tools = LLM.bind_tools(tools)
 tools_description = "\n\n".join([f'{tool.name}\n{tool.description}' for tool in tools])
@@ -33,7 +36,9 @@ def check_tool_call_limit(state: AgentState, tool_call_name: str):
         return True
     return False
 
-def update_tool_call(state: AgentState, tool_call_name: str, tool_call_args: dict, tool_call_outupt: dict):
+def update_tool_call(
+    state: AgentState, tool_call_name: str, tool_call_args: dict, tool_call_outupt: dict
+):
     """Update the tool call count and arguments"""
     if "tool_call" not in state:
         state["tool_call"] = {}
@@ -46,6 +51,7 @@ def update_tool_call(state: AgentState, tool_call_name: str, tool_call_args: dic
     state["tool_call"][tool_call_name]["outputs"].append(tool_call_outupt)
 
 def init_state(state: AgentState) -> AgentState:
+    """Init state node to define or set the value of some state parameters."""
     state["chunks"] = []
     state["tool_call"] = {}
     return state
@@ -86,17 +92,34 @@ def tool_node(state: AgentState) -> AgentState:
             tool = tools_by_name[tool_name]
             tool_result = tool.invoke(tool_args)
             update_tool_call(state, tool_name, tool_args, tool_result)
-        
-        result.append(ToolMessage(content=tool_result, tool_call_id=tool_call["id"]))
+        # Get the observation from the tool result
+        if tool_result.get("status", False):
+            observation = tool_result.get("result")
+        else:
+            observation = tool_result.get("message")
+
+        result.append(ToolMessage(content=observation, tool_call_id=tool_call["id"]))
         state["messages"] = result
     return state
 
 def output_response(state: AgentState):
-    final_answer = state["messages"][-1].content
-    match = re.search(r'<thinking>(.*?)</thinking>', final_answer, re.DOTALL)
-    thinking_variable = match.group(1).strip() if match else None
-    state["answer"] = re.sub(r'<thinking>.*?</thinking>', '', final_answer, flags=re.DOTALL).strip()
-    state["thinking"] = thinking_variable
+    """format the response node to adjust the output"""
+    last_msg = state["messages"][-1].content
+    answer = ""
+    thinking = ""
+
+    if isinstance(last_msg, list):
+        for i in last_msg:
+            if isinstance(i, dict):
+                if i.get("type") == "text":
+                    answer = i["text"]
+    else:
+        answer = last_msg
+
+    match = re.search(r'<thinking>(.*?)</thinking>', answer, re.DOTALL)
+    thinking = match.group(1).strip() if match else None
+    state["answer"] = re.sub(r'<thinking>.*?</thinking>', '', answer, flags=re.DOTALL).strip()
+    state["thinking"] = thinking
     return state
 
 def should_continue(state: AgentState) -> Literal["Action", "END"]:
@@ -131,28 +154,11 @@ agent_builder.add_edge("output_response", END)
 
 checkpointer = InMemorySaver()
 
-agent = agent_builder.compile(checkpointer=checkpointer)
-
-def ask_agent(session_id: str, question: str) -> tuple[AgentState, Dict[str, int]]:
-    start_time = perf_counter()
-    response = agent.invoke(
-        {"messages": [{"role": "user", "content": question}]},
-        config={
-            "callbacks": [callback_handler],
-            "configurable": {"thread_id": session_id},
-        },
-    )
-    exec_time = perf_counter() - start_time
-    request_stats = callback_handler.get_request_stats()
-    request_stats["exec_time"] = exec_time
-    logger.info(f"Response: {response}")
-    logger.info(f"Total Stats: {callback_handler.get_total_stats()}")
-    return response, request_stats
+rag_agent = agent_builder.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
-    response, stats = ask_agent("user1", "ما هى عاصمة مصر")
-    print(response)
-    print(stats)
-    print("\n")
-    for msg in response["messages"]:
-        msg.pretty_print()
+    try:
+        with open("agents\rag\agent_graph.png", "wb") as f:
+            f.write(rag_agent.get_graph(xray=True).draw_mermaid_png())
+    except Exception as e:
+        print(e)

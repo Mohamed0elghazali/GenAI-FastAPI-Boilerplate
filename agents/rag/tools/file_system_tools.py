@@ -24,15 +24,57 @@ def write_file(text: str, file_name: str, encoding: str = "utf-8") -> None:
     # Write text to file
     path.write_text(text, encoding=encoding)
 
+def list_dir(dir_name: str = "") -> list[str]:
+    """
+    List files and folders inside data/tmp/<dir_name>
+
+    Args:
+        dir_name: Subdirectory inside data/tmp
+
+    Returns:
+        List of file and folder names
+    """
+
+    path = Path("data/tmp") / dir_name
+
+    # Create directory if it does not exist
+    # path.mkdir(parents=True, exist_ok=True)
+
+    return [item.name for item in path.iterdir()]
+
 @tool
 @timeit
 def write_file_tool(content: str, file_name: str) -> dict:
-    """Write a file to disk with the specified content and filename."""
+    """
+    Write a file to disk with the specified content and filename.
+    """
+
     try:
-        create_file(content, file_name)
+        write_file(content, file_name)
+
         return {"status": True, "message": None, "result": f"File `{file_name}` written successfully."}
+
     except Exception as e:
         logger.warning(f"error at write file: {e}")
+
+        return {"status": False, "message": str(e), "result": None}
+
+
+@tool
+@timeit
+def ls_dir_tool(dir_name: str = "") -> dict:
+    """
+    List files and folders inside a directory.
+    """
+
+    try:
+        files = list_dir(dir_name)
+
+        return {"status": True, "message": None, "result": files}
+
+    except Exception as e:
+        logger.warning(f"error at listing directory: {e}")
+
         return {"status": False, "message": str(e), "result": None}
 
 

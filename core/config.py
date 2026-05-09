@@ -10,6 +10,7 @@ Usage:
 """
 
 from functools import lru_cache
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,6 +68,17 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def strip_inline_comments(cls, values: dict) -> dict:
+        """Strip inline comments from all string env vars (e.g. 'bedrock  # comment' → 'bedrock')."""
+        if not isinstance(values, dict):
+            return values
+        return {
+            k: v.split("#")[0].strip() if isinstance(v, str) else v
+            for k, v in values.items()
+        }
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -75,4 +87,5 @@ def get_settings() -> Settings:
 
 
 # Convenience singleton imported everywhere
+# Call get_settings.cache_clear() if you need to reload after env changes
 settings: Settings = get_settings()

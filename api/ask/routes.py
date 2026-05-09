@@ -6,34 +6,46 @@ Migrated from routes/ask.py and updated to use typed schemas.
 """
 
 import asyncio
+import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.ask.schemas import AskRequest, AskResponse
+from agents.rag.invoke_agent import ask_agent, aask_agent
 
-ask_router = APIRouter(prefix="/ask", tags=["Ask"])
+logger = logging.getLogger(__name__)
 
+ask_router = APIRouter(prefix="", tags=["Ask"])
 
-@ask_router.post("/", response_model=AskResponse)
+@ask_router.post("/ask", response_model=AskResponse)
 async def ask(payload: AskRequest):
     """Synchronous ask — returns a complete response."""
-    return AskResponse(
-        answer=f"Processed: {payload.question}",
-        session_id=payload.session_id,
-        mode="sync",
-    )
+    try:
+        res, stats = ask_agent(session_id=payload.session_id, question=payload.question)
+        return AskResponse(
+            answer=res.get("answer", "no answer found. try again."),
+            session_id=payload.session_id,
+            stats=stats
+        )
+    except Exception as e:
+        logger.error(f"error at ask agent. error: {str(e)}",)
+        return HTTPException(status_code=500, detail=str(e))
 
 
-@ask_router.post("/async", response_model=AskResponse)
+@ask_router.post("/async-ask", response_model=AskResponse)
 async def aask(payload: AskRequest):
     """Async ask — awaits the agent before returning."""
-    await asyncio.sleep(0.2)  # replace with real agent call
-    return AskResponse(
-        answer=f"Async processed: {payload.question}",
-        session_id=payload.session_id,
-        mode="async",
-    )
+    try:
+        res, stats = await aask_agent(session_id=payload.session_id, question=payload.question)
+        return AskResponse(
+            answer=res.get("answer", "no answer found. try again."),
+            session_id=payload.session_id,
+            stats=stats
+        )
+    except Exception as e:
+        logger.error(f"error at aask agent. error: {str(e)}",)
+        return HTTPException(status_code=500, detail=str(e))
 
 
 @ask_router.post("/stream")
